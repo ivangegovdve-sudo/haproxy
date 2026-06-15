@@ -48,17 +48,10 @@ struct hld_thr_info {
 	uint32_t cur_req;            // number of active requests
 	uint32_t curconn;            // number of active connections
 	uint32_t maxconn;            // max number of active connections
-	uint32_t is_ssl;             // non-zero if SSL is used
 	uint64_t tot_conn;           // total conns attempted on this thread
 	uint64_t tot_done;           // total requests finished (successes+failures)
-	uint64_t tot_sent;           // total bytes sent on this thread
 	uint64_t tot_rcvd;           // total bytes received on this thread
-	uint64_t tot_serr;           // total socket errors on this thread
-	uint64_t tot_cerr;           // total connection errors on this thread
-	uint64_t tot_xerr;           // total xfer errors on this thread
 	uint64_t tot_perr;           // total protocol errors on this thread
-	uint64_t tot_cto;            // total connection timeouts on this thread
-	uint64_t tot_xto;            // total xfer timeouts on this thread
 	uint64_t tot_fbs;            // total number of ttfb samples
 	uint64_t tot_ttfb;           // total time-to-first-byte (us)
 	uint64_t tot_lbs;            // total number of ttlb samples
@@ -66,14 +59,6 @@ struct hld_thr_info {
 	uint64_t *ttfb_pct;          // counts per ttfb value for percentile
 	uint64_t *ttlb_pct;          // counts per ttlb value for percentile
 	uint64_t tot_sc[5];          // total status codes on this thread: 1xx,2xx,3xx,4xx,5xx
-	int start_len;               // request's start line's length
-	char *start_line;            // copy of the request's start line to be sent
-	char *hdr_block;             // copy of the request's header block to be sent
-	int hdr_len;                 // request's header block's length
-	int ka_req_len;              // keep-alive request length
-	char *ka_req;                // fully assembled keep-alive request
-	char *cl_req;                // fully assembled close request
-	int cl_req_len;              // close request length
 	__attribute__((aligned(64))) union { } __pad;
 };
 
@@ -367,6 +352,11 @@ static void hld_trace(enum trace_level level, uint64_t mask, const struct trace_
 	}
 }
 
+/* Tries to grab a buffer and to re-enables processing on haload stream <target>.
+ * The flags are used to figure what buffer was requested. It returns 1 if the
+ * allocation succeeds, in which case the haload stream is woken up, or 0 if it's
+ * impossible to wake up and we prefer to be woken up later.
+ */
 int hldstream_buf_available(void *target)
 {
 	struct hldstream *hs = target;
@@ -403,11 +393,17 @@ struct buffer *hldstream_get_buf(struct hldstream *hs, struct buffer *bptr)
 	return buf;
 }
 
+/* Allocate the output buffer attached to <hs> haload stream and returns
+ * it if succeded, NULL if not.
+ */
 static inline struct buffer *hldstream_get_obuf(struct hldstream *hs)
 {
 	return hldstream_get_buf(hs, &hs->bo);
 }
 
+/* Allocate the input buffer attached to <hs> haload stream and returns
+ * it if succeded, NULL if not.
+ */
 static inline struct buffer *hldstream_get_ibuf(struct hldstream *hs)
 {
 	return hldstream_get_buf(hs, &hs->bi);
@@ -424,16 +420,19 @@ void hldstream_release_buf(struct hldstream *hs, struct buffer *bptr)
 	}
 }
 
+/* Release the input buffer attached to <hs> haload stream */
 static inline void hldstream_release_ibuf(struct hldstream *hs)
 {
 	hldstream_release_buf(hs, &hs->bi);
 }
 
+/* Release the output buffer attached to <hs> haload stream */
 static inline void hldstream_release_obuf(struct hldstream *hs)
 {
 	hldstream_release_buf(hs, &hs->bo);
 }
 
+/* Free <*hs> haload stream and reset its address to NULL */
 static inline void hldstream_free(struct hldstream **hs)
 {
 	struct hldstream *h = *hs;
@@ -454,7 +453,7 @@ static inline void hldstream_free(struct hldstream **hs)
  * here, thus it will be created by sc_new(). So the SE_FL_DETACHED flag is set.
  * It returns NULL on error. On success, the new stream connector is returned.
  */
-struct stconn *sc_new_from_hldstream(struct hldstream *hs, unsigned int flags)
+static inline struct stconn *sc_new_from_hldstream(struct hldstream *hs, unsigned int flags)
 {
 	struct stconn *sc;
 
@@ -582,10 +581,7 @@ void hld_summary(void)
 		cur_conn += HA_ATOMIC_LOAD(&thrs_info[th].curconn);
 		tot_conn += HA_ATOMIC_LOAD(&thrs_info[th].tot_conn);
 		tot_req  += HA_ATOMIC_LOAD(&thrs_info[th].tot_done);
-		tot_err  += HA_ATOMIC_LOAD(&thrs_info[th].tot_serr) +
-		            HA_ATOMIC_LOAD(&thrs_info[th].tot_cerr) +
-		            HA_ATOMIC_LOAD(&thrs_info[th].tot_xerr) +
-		            HA_ATOMIC_LOAD(&thrs_info[th].tot_perr);
+		tot_err  += HA_ATOMIC_LOAD(&thrs_info[th].tot_perr);
 		tot_rcvd += HA_ATOMIC_LOAD(&thrs_info[th].tot_rcvd);
 		tot_ttfb += HA_ATOMIC_LOAD(&thrs_info[th].tot_ttfb);
 		tot_ttlb += HA_ATOMIC_LOAD(&thrs_info[th].tot_ttlb);
@@ -908,7 +904,9 @@ static int hldstream_htx_buf_snd(struct connection *conn, struct hldstream *hs)
 	return ret;
 }
 
-__attribute__((unused))
+/* Handle HTX data to be received by <h> haload stream. Also set
+ * <*fin> to 1 if the end of stream is reached.
+ */
 static void hldstream_htx_buf_rcv(struct connection *conn,
                                   struct hldstream *hs, int *fin)
 {
@@ -916,7 +914,6 @@ static void hldstream_htx_buf_rcv(struct connection *conn,
 	size_t max, read = 0, cur_read = 0;
 	int is_empty = 0;
 	struct htx_sl *sl = NULL;
-	__attribute__((unused))
 	uint64_t ttfb, ttlb;     // time-to-first-byte, time-to-last-byte (in us)
 
 	TRACE_ENTER(HLD_STRM_EV_RX, hs);

@@ -62,6 +62,10 @@ static const char *hld_cfg_traces_str =
 		"\ttrace h3 sink stderr level developer start now verbosity minimal\n"
 		"\ttrace qmux sink stderr level developer start now verbosity minimal\n";
 
+/* Allocate <hdr_str> header with "<name>:<value>" form and
+ * returs it.
+ * Return the hld_hdr struct header if succeeded, NULL if not
+ */
 static struct hld_hdr *hld_parse_hdr(char *hdr_str)
 {
 	struct hld_hdr *hdr= NULL;
@@ -87,6 +91,7 @@ static struct hld_hdr *hld_parse_hdr(char *hdr_str)
 	return hdr;
 }
 
+/* Add option made of <kw> keyword and <value> value to <buf> buffer */
 static int hld_add_opt_to_buf(struct hbuf *buf,
                               const char *kw, const char *value)
 {
@@ -105,14 +110,16 @@ static int hld_add_opt_to_buf(struct hbuf *buf,
 	return 1;
 }
 
-static inline void hld_free_url_cfg(struct hld_url_cfg *h)
+/* Free <u> URL config */
+static inline void hld_free_url_cfg(struct hld_url_cfg *u)
 {
-	free(h->addr);
-	free(h->srv_opts);
-	free(h->tls_opts);
-	free(h);
+	free(u->addr);
+	free(u->srv_opts);
+	free(u->tls_opts);
+	free(u);
 }
 
+/* Free all the allocated URL configs */
 static inline void hld_free_url_cfgs(void)
 {
 	struct hld_url_cfg *purl;
@@ -303,6 +310,10 @@ static struct hld_url_cfg *hld_alloc_url(char *url)
 	return NULL;
 }
 
+/* Parse <opt> argument from <*arvg> command line array of argument as
+ * an integer positive value into <*val> and update <*argv> and <*argc>.
+ * Display the halod program usage if failed and exit(1).
+ */
 static void hld_parse_long(int *val, char *opt, int *argc, char ***argv)
 {
 	char *endptr;
@@ -320,6 +331,7 @@ static void hld_parse_long(int *val, char *opt, int *argc, char ***argv)
 		hld_usage(progname, *argc);
 }
 
+/* Inverse the order of the allocated URL configs */
 static inline void hld_url_cfgs_inv(void)
 {
 	struct hld_url_cfg *urls = NULL, *url = hld_url_cfgs, *next_url;
