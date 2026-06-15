@@ -15,7 +15,7 @@ char *srv_opts, *tls_ciphers, *tls_ciphersuites, *tls_curves, *alpn;
 int h2c;
 int id_url, id_path;
 
-static void  hld_usage(char *name, int argc, int line)
+static void  hld_usage(char *name, int argc)
 {
 	fprintf(stderr,
 		"Usage : %s [opts] [URL]\n"
@@ -315,14 +315,14 @@ static void hld_parse_long(int *val, char *opt, int *argc, char ***argv)
 	if (!*opt) {
 		++*argv; --*argc;
 		if (*argc <= 0 || ***argv == '-')
-			hld_usage(progname, *argc, __LINE__);
+			hld_usage(progname, *argc);
 
 		opt = **argv;
 	}
 
 	*val = strtol(opt, &endptr, 0);
 	if (endptr == opt || *val < 0)
-		hld_usage(progname, *argc, __LINE__);
+		hld_usage(progname, *argc);
 }
 
 static inline void hld_url_cfgs_inv(void)
@@ -361,7 +361,7 @@ void haproxy_init_args(int argc, char **argv)
 	struct hbuf dbuf = HBUF_NULL; // "default" section
 
 	if (argc <= 1)
-		hld_usage(progname, argc, __LINE__);
+		hld_usage(progname, argc);
 
 	if (hbuf_alloc(&gbuf) == NULL) {
 		ha_alert("failed to allocate a buffer.\n");
@@ -395,7 +395,7 @@ void haproxy_init_args(int argc, char **argv)
 				if (strcmp(opt, "defaults") == 0) {
 					argv++; argc--;
 					if (argc <= 0 || **argv == '-')
-						hld_usage(progname, argc, __LINE__);
+						hld_usage(progname, argc);
 
 					if (hbuf_is_null(&dbuf)) {
 						if (hbuf_alloc(&dbuf) == NULL) {
@@ -411,14 +411,14 @@ void haproxy_init_args(int argc, char **argv)
 				else if (strcmp(opt, "global") == 0) {
 					argv++; argc--;
 					if (argc <= 0 || **argv == '-')
-						hld_usage(progname, argc, __LINE__);
+						hld_usage(progname, argc);
 
 					hbuf_str_append(&gbuf, *argv);
 				}
 				else if (strcmp(opt, "server") == 0) {
 					argv++, argc--;
 					if ((argc <= 0 || **argv == '-'))
-						hld_usage(progname, argc, __LINE__);
+						hld_usage(progname, argc);
 
 					opt = *argv;
 					free(srv_opts);
@@ -430,7 +430,7 @@ void haproxy_init_args(int argc, char **argv)
 				else if (strcmp(opt, "tls-ciphers") == 0) {
 					argv++, argc--;
 					if ((argc <= 0 || **argv == '-'))
-						hld_usage(progname, argc, __LINE__);
+						hld_usage(progname, argc);
 					opt = *argv;
 					free(tls_ciphers);
 					tls_ciphers = strdup(opt);
@@ -438,7 +438,7 @@ void haproxy_init_args(int argc, char **argv)
 				else if (strcmp(opt, "tls-ciphersuites") == 0) {
 					argv++, argc--;
 					if ((argc <= 0 || **argv == '-'))
-						hld_usage(progname, argc, __LINE__);
+						hld_usage(progname, argc);
 					opt = *argv;
 					free(tls_ciphersuites);
 					tls_ciphersuites = strdup(opt);
@@ -446,7 +446,7 @@ void haproxy_init_args(int argc, char **argv)
 				else if (strcmp(opt, "tls-curves") == 0) {
 					argv++, argc--;
 					if ((argc <= 0 || **argv == '-'))
-						hld_usage(progname, argc, __LINE__);
+						hld_usage(progname, argc);
 					opt = *argv;
 					free(tls_curves);
 					tls_curves = strdup(opt);
@@ -455,7 +455,7 @@ void haproxy_init_args(int argc, char **argv)
 					hld_debug = 1;
 				}
 				else
-					hld_usage(progname, argc, __LINE__);
+					hld_usage(progname, argc);
 			}
 			else if (strcmp(opt, "0") == 0 ||
 			         strcmp(opt, "h0") == 0) {
@@ -489,7 +489,7 @@ void haproxy_init_args(int argc, char **argv)
 			else if (*opt == 'e') {
 				/* empty option */
 				if (*(opt + 1))
-					hld_usage(progname, argc, __LINE__);
+					hld_usage(progname, argc);
 
 				arg_serr = 1;
 			}
@@ -530,7 +530,7 @@ void haproxy_init_args(int argc, char **argv)
 			else if (*opt == 'C') {
 				/* empty option */
 				if (*(opt + 1))
-					hld_usage(progname, argc, __LINE__);
+					hld_usage(progname, argc);
 
 				dump = 1;
 			}
@@ -542,7 +542,7 @@ void haproxy_init_args(int argc, char **argv)
 				if (!*opt) {
 					argv++; argc--;
 					if ((argc <= 0 || **argv == '-'))
-						hld_usage(progname, argc, __LINE__);
+						hld_usage(progname, argc);
 
 					opt = *argv;
 				}
@@ -559,20 +559,20 @@ void haproxy_init_args(int argc, char **argv)
 			else if (*opt == 'I') {
 				/* empty option */
 				if (*(opt + 1))
-					hld_usage(progname, argc, __LINE__);
+					hld_usage(progname, argc);
 
 				arg_head = 1;
 			}
 			else if (*opt == 'v') {
 				/* empty option */
 				if (*(opt + 1))
-					hld_usage(progname, argc, __LINE__);
+					hld_usage(progname, argc);
 
 				printf("haload version " HAPROXY_VERSION " released " HAPROXY_DATE "\n");
 				exit(0);
 			}
 			else
-				hld_usage(progname, argc, __LINE__);
+				hld_usage(progname, argc);
 		}
 		else {
 			struct hld_url_cfg *url;
