@@ -13,7 +13,6 @@ static int hld_debug;
 struct hld_url_cfg *hld_url_cfgs;
 char *srv_opts, *tls_ciphers, *tls_ciphersuites, *tls_curves, *alpn;
 int h2c;
-int id_url, id_path;
 
 static void  hld_usage(char *name, int argc)
 {
@@ -217,7 +216,6 @@ static struct hld_url_cfg *hld_alloc_url(char *url)
 				goto err;
 
 			/* Append a new path to this URL */
-			p->id = id_path++;
 			p->path = path;
 			p->next = hld_url_cfg->paths;
 			hld_url_cfg->paths = p;
@@ -248,12 +246,9 @@ static struct hld_url_cfg *hld_alloc_url(char *url)
 	if (!hld_url_cfg || !p)
 		goto err;
 
-	id_path = 0;
-	p->id = id_path++;
 	p->path = path;
 	p->next = NULL;
 
-	hld_url_cfg->id = id_url++;
 	hld_url_cfg->ssl = ssl;
 	hld_url_cfg->is_quic = is_quic;
 	hld_url_cfg->h2c = h2c;

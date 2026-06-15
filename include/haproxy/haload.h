@@ -8,13 +8,11 @@
 #include <haproxy/task-t.h>
 
 struct hld_path {
-	int id;
 	char *path;
 	struct hld_path *next;
 };
 
 struct hld_url_cfg {
-	int id;
 	int ssl;
 	int is_quic;
 	int h2c;
