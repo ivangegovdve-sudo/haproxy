@@ -1788,7 +1788,7 @@ static int hld_init(void)
 	putchar('\n');
 
 	mtask.t->process = mtask_cb;
-	mtask.t->nice = -1024;
+	//mtask.t->nice = -1024;
 	mtask.t->expire = TICK_ETERNITY;
 	mtask.show_time = tick_add(now_ms, MS_TO_TICKS(1000));
 
