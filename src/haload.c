@@ -27,7 +27,7 @@
 #define HLD_STRM_ST_MUST_RECV    0x0020
 #define HLD_STRM_ST_GOT_RESP_SL  0x0040
 
-static inline struct hld_usr *hld_new_usr(int nreqs);
+static inline struct hld_usr *hld_new_usr(int nreqs, int tid);
 
 struct hld_mtask {
 	struct task *t;
@@ -47,7 +47,8 @@ struct hld_thr_info {
 	struct hld_freq_ctr conn_rate;   // thread's measured connection rate
 	uint32_t cur_req;            // number of active requests
 	uint32_t curconn;            // number of active connections
-	uint32_t maxconn;            // max number of active connections
+	uint32_t curusrs;            // number of active users
+	uint32_t maxusrs;            // max number of users
 	uint64_t tot_conn;           // total conns attempted on this thread
 	uint64_t tot_done;           // total requests finished (successes+failures)
 	uint64_t tot_rcvd;           // total bytes received on this thread
@@ -100,10 +101,9 @@ int arg_usr = 1;       // number of users
 int arg_wait = 10000;  // I/O time out (ms)
 
 int all_usr_stop_asap; // all users must stop as soon as possible
-int conn_tid;
+int usr_tid;
 int usr_cnt;           // user counter incremented by <mtask> main task
 int running_usrs;      // user counter decremented each time a user is released
-int min_reqs, mod_req;
 
 char *hld_args[MAX_LINE_ARGS + 1];
 
@@ -744,12 +744,11 @@ void update_throttle()
 /* main task */
 static struct task *mtask_cb(struct task *t, void *context, unsigned int state)
 {
-	int i, nb_usr;
-
 	TRACE_ENTER(HLD_EV_MAIN_TASK);
 
 	gettimeofday(&hld_now, NULL);
 
+	update_throttle();
 	if (tick_is_expired(mtask.show_time, now_ms)) {
 		hld_summary();
 		if (!HA_ATOMIC_LOAD(&running_usrs)) {
@@ -767,28 +766,54 @@ static struct task *mtask_cb(struct task *t, void *context, unsigned int state)
 
 	/* users initializations */
 	if (usr_cnt < arg_usr) {
-		BUG_ON(usr_cnt > arg_usr);
-		nb_usr = MIN(arg_usr, arg_usr - usr_cnt);
-		nb_usr = MIN(80, nb_usr);
-		for (i = 0; i < nb_usr; i++, usr_cnt++) {
-			struct hld_usr *hu;
-			int req = min_reqs == -1 ? -1 :
-				i < mod_req ? min_reqs + 1 : min_reqs;
+		if (throttle) {
+			int i, nb_usr;
 
-			hu = hld_new_usr(req);
-			if (!hu) {
-				ha_alert("could not allocate a new haload user\n");
-				break;
+			for (i = 0; i < global.nbthread; i++) {
+				nb_usr = mul32hi(thrs_info[i].maxusrs, throttle);
+				nb_usr = nb_usr ? nb_usr : 1;
+
+				while (thrs_info[i].curusrs < nb_usr) {
+					struct hld_usr *hu;
+					int req = arg_reqs == -1 ? -1 : (arg_reqs + usr_cnt) / arg_usr;
+
+					hu = hld_new_usr(req, i);
+					if (!hu) {
+						ha_alert("could not allocate a new haload user\n");
+						break;
+					}
+
+					HA_ATOMIC_INC(&running_usrs);
+					usr_cnt++;
+				}
 			}
+
+			t->expire = tick_add(now_ms, MS_TO_TICKS(20));
+		}
+		else {
+			int i, nb_usr;
+
+			nb_usr = MIN(arg_usr, arg_usr - usr_cnt);
+			nb_usr = MIN(80, nb_usr);
+			for (i = 0; i < nb_usr; i++, usr_cnt++) {
+				struct hld_usr *hu;
+				int req = arg_reqs == -1 ? -1 : (arg_reqs + usr_cnt) / arg_usr;
+
+				hu = hld_new_usr(req, usr_tid++ % global.nbthread);
+				if (!hu) {
+					ha_alert("could not allocate a new haload user\n");
+					break;
+				}
+			}
+
+			HA_ATOMIC_ADD(&running_usrs, nb_usr);
+			task_wakeup(t, TASK_WOKEN_IO);
 		}
 
-		HA_ATOMIC_ADD(&running_usrs, nb_usr);
-		task_wakeup(t, TASK_WOKEN_IO);
 	}
 	else
 		t->expire = tick_add(now_ms, MS_TO_TICKS(1000));
 
-	update_throttle();
 leave:
 	TRACE_LEAVE(HLD_EV_MAIN_TASK);
 	return t;
@@ -1444,7 +1469,7 @@ static struct task *hld_usr_task(struct task *t, void *context, unsigned int sta
 }
 
 /* Instantiate a haload user and wake up its underlying task */
-static inline struct hld_usr *hld_new_usr(int nreqs)
+static inline struct hld_usr *hld_new_usr(int nreqs, int tid)
 {
 	struct hld_usr *usr;
 	struct hld_url_cfg *cfg;
@@ -1454,7 +1479,7 @@ static inline struct hld_usr *hld_new_usr(int nreqs)
 
 	BUG_ON(!nreqs);
 	usr = malloc(sizeof(*usr));
-	t = task_new_on(conn_tid++ % global.nbthread);
+	t = task_new_on(tid);
 	sess = session_new(&hld_proxy, NULL, NULL);
 	if (!usr || !t || !sess) {
 		ha_alert("could not allocate a new user\n");
@@ -1489,6 +1514,7 @@ static inline struct hld_usr *hld_new_usr(int nreqs)
 		usr->urls = url;
 	}
 
+	HA_ATOMIC_INC(&thrs_info[tid].curusrs);
 	/* inverse the URLs order */
 	url = usr->urls;
 	while (url) {
@@ -1707,6 +1733,23 @@ void sigint_handler(int sig)
 	signal(SIGINT, SIG_DFL);
 }
 
+/* Allocate all thread information structs */
+static int hld_alloc_thrs_info(void)
+{
+	int i;
+
+	thrs_info = calloc(global.nbthread, sizeof(*thrs_info));
+	if (!thrs_info) {
+		ha_alert("failed to alloct threads information array.\n");
+		return 0;
+	}
+
+	for (i = 0; i < global.nbthread; i++)
+		thrs_info[i].maxusrs = (arg_usr + i) / global.nbthread;
+
+	return 1;
+}
+
 static int hld_init(void)
 {
 	int ret = ERR_ALERT | ERR_FATAL;
@@ -1718,12 +1761,12 @@ static int hld_init(void)
 	if (!hld_cfg_finalize())
 		goto leave;
 
-	min_reqs = arg_reqs > 0 ? arg_reqs / arg_usr : -1;
-	mod_req = arg_reqs > 0 ? arg_reqs % arg_usr : -1;
-
 	/* Consider the case where <arg_reqs> < <arg_usr> */
-	if (!min_reqs)
-		arg_usr = mod_req;
+	if (arg_reqs < arg_usr)
+		arg_usr = arg_reqs;
+
+	if (!hld_alloc_thrs_info())
+		goto leave;
 
 	mtask.t = task_new_here();
 	if (mtask.t == NULL) {
@@ -1760,20 +1803,9 @@ static int hld_init(void)
 	signal(SIGINT, sigint_handler);
 
 	ret = ERR_NONE;
+	hld_alloc_thrs_info();
  leave:
 	ha_free(&errmsg);
 	return ret;
 }
 REGISTER_POST_CHECK(hld_init);
-
-static int hld_alloc_thrs_info(void)
-{
-	thrs_info = calloc(global.nbthread, sizeof(*thrs_info));
-	if (!thrs_info) {
-		ha_alert("failed to alloct threads information array.\n");
-		return -1;
-	}
-
-	return 1;
-}
-REGISTER_POST_CHECK(hld_alloc_thrs_info);
